@@ -35,6 +35,7 @@ python merge_bboxes.py \
 Expected output:
 - `demo/output/merged_bboxes.json`
 - `demo/output/crops/merged_0000.txt`, ...
+- `demo/output/visualization/input_bboxes.obj`
 - `demo/output/visualization/merged_bboxes.obj`
 - `demo/output/visualization/expanded_bboxes.obj`
 

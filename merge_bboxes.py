@@ -387,6 +387,27 @@ def save_bboxes_wireframe_obj(merged: Sequence[dict], out_file: Path, use_expand
             vertex_offset += 8
 
 
+def save_input_bboxes_wireframe_obj(bboxes: Sequence[BBoxRecord], out_file: Path) -> None:
+    """Save original input bboxes as wireframe OBJ for comparison/debug."""
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    edges = [
+        (1, 2), (2, 3), (3, 4), (4, 1),
+        (5, 6), (6, 7), (7, 8), (8, 5),
+        (1, 5), (2, 6), (3, 7), (4, 8),
+    ]
+    with out_file.open("w", encoding="utf-8") as f:
+        f.write("# input bbox wireframe\n")
+        vertex_offset = 0
+        for i, b in enumerate(bboxes):
+            corners = box_corners_from_min_max(b.min_corner, b.max_corner)
+            f.write(f"o input_{i:04d}_block_{b.block_id}_label_{b.label}\n")
+            for v in corners:
+                f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
+            for a, c in edges:
+                f.write(f"l {vertex_offset + a} {vertex_offset + c}\n")
+            vertex_offset += 8
+
+
 def run_pipeline(
     blocks_dir: Path,
     bbox_json: Path,
@@ -423,6 +444,7 @@ def run_pipeline(
 
     if save_vis:
         vis_dir = out_dir / "visualization"
+        save_input_bboxes_wireframe_obj(bboxes, vis_dir / "input_bboxes.obj")
         save_bboxes_wireframe_obj(merged, vis_dir / "merged_bboxes.obj", use_expanded=False)
         save_bboxes_wireframe_obj(merged, vis_dir / "expanded_bboxes.obj", use_expanded=True)
 
