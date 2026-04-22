@@ -61,7 +61,12 @@ class UnionFind:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Merge duplicated 3D bboxes across blocks.")
     parser.add_argument("--blocks_dir", type=Path, required=True, help="Directory containing block txt files")
-    parser.add_argument("--bbox_json", type=Path, required=True, help="Path to bbox JSON file")
+    parser.add_argument(
+        "--bbox_json",
+        type=Path,
+        required=True,
+        help="Path to bbox JSON file, or directory containing per-block JSON files",
+    )
     parser.add_argument("--out_dir", type=Path, required=True, help="Output directory")
     parser.add_argument("--iou_thr", type=float, default=0.1, help="IoU threshold for merging")
     parser.add_argument(
@@ -89,12 +94,44 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError(f"expand_ratio must be > 0, got {args.expand_ratio}")
 
 
-def load_bboxes(bbox_json: Path) -> List[BBoxRecord]:
-    with bbox_json.open("r", encoding="utf-8") as f:
+def _load_bbox_items_from_json_file(json_file: Path) -> list:
+    with json_file.open("r", encoding="utf-8") as f:
         data = json.load(f)
-
     if not isinstance(data, list):
-        raise ValueError("bbox_json must contain a list of bbox objects")
+        raise ValueError(f"{json_file} must contain a list of bbox objects")
+    return data
+
+
+def load_bboxes(bbox_json: Path) -> List[BBoxRecord]:
+    """
+    Load bbox records.
+
+    Supported input:
+    1) a single json file containing a list of bboxes with `block_id`
+    2) a directory of json files where each file name stem is used as default `block_id`
+    """
+    if bbox_json.is_dir():
+        data: list = []
+        json_files = sorted(bbox_json.glob("*.json"))
+        if not json_files:
+            raise ValueError(f"No json files found in bbox_json directory: {bbox_json}")
+        for jf in json_files:
+            stem_block_id = jf.stem
+            items = _load_bbox_items_from_json_file(jf)
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ValueError(f"bbox item in {jf} is not an object")
+                if "block_id" in item and str(item["block_id"]) != stem_block_id:
+                    raise ValueError(
+                        f"In directory mode, bbox json file name must match block_id: "
+                        f"{jf.name} vs block_id={item['block_id']}. "
+                        f"Expected naming like <block_id>.json"
+                    )
+                if "block_id" not in item:
+                    item = {**item, "block_id": stem_block_id}
+                data.append(item)
+    else:
+        data = _load_bbox_items_from_json_file(bbox_json)
 
     bboxes: List[BBoxRecord] = []
     required_keys = {"block_id", "center", "extent", "label", "score"}
@@ -134,6 +171,25 @@ def load_bboxes(bbox_json: Path) -> List[BBoxRecord]:
         )
 
     return bboxes
+
+
+def validate_block_mapping(bboxes: Sequence[BBoxRecord], blocks_dir: Path) -> None:
+    """
+    Validate bbox/block one-to-one mapping by block_id prefix.
+    Each bbox's block_id must map to `<blocks_dir>/<block_id>.txt`.
+    """
+    missing = []
+    for b in bboxes:
+        point_file = blocks_dir / f"{b.block_id}.txt"
+        if not point_file.exists():
+            missing.append(str(point_file))
+    if missing:
+        msg = "\n".join(missing[:10])
+        extra = "" if len(missing) <= 10 else f"\n... and {len(missing) - 10} more"
+        raise FileNotFoundError(
+            "Detected bbox block_id without corresponding block txt (expected same prefix name):\n"
+            f"{msg}{extra}"
+        )
 
 
 def iou_3d(min_a: np.ndarray, max_a: np.ndarray, min_b: np.ndarray, max_b: np.ndarray) -> float:
@@ -332,6 +388,7 @@ def run_pipeline(
     save_vis: bool = False,
 ) -> None:
     bboxes = load_bboxes(bbox_json)
+    validate_block_mapping(bboxes, blocks_dir)
     merged = merge_bboxes_by_label(bboxes, iou_thr=iou_thr)
 
     out_dir.mkdir(parents=True, exist_ok=True)

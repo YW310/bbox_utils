@@ -5,13 +5,19 @@ This folder provides a minimal runnable example.
 ## Files
 - `blocks/block_0001.txt`
 - `blocks/block_0002.txt`
+- `blocks/block_0003.txt`
+- `blocks/block_0004.txt`
 - `bboxes.json`
+- `bboxes/block_0001.json`
+- `bboxes/block_0002.json`
+- `bboxes/block_0003.json`
+- `bboxes/block_0004.json`
 
 ## Run
 ```bash
 python merge_bboxes.py \
   --blocks_dir ./demo/blocks \
-  --bbox_json ./demo/bboxes.json \
+  --bbox_json ./demo/bboxes \
   --out_dir ./demo/output \
   --iou_thr 0.1 \
   --expand_ratio 1.5 \
@@ -23,3 +29,9 @@ Expected output:
 - `demo/output/crops/merged_0000.txt`, ...
 - `demo/output/visualization/merged_bboxes.obj`
 - `demo/output/visualization/expanded_bboxes.obj`
+
+## Demo highlights
+- `bboxes/` 目录使用 `<block_id>.json` 命名（如 `block_0001.json`），与 `blocks/<block_id>.txt` 一一对应。
+- label=0 target is duplicated across **3 adjacent blocks** (`block_0001`~`block_0003`) to validate transitive/connected merging.
+- label=2 target is duplicated across `block_0002` and `block_0004`.
+- label=1 target is duplicated around `(5, 5, 5)` across `block_0003` and `block_0004`.
