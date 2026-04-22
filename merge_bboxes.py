@@ -321,6 +321,38 @@ def collect_crop_points(
     return np.concatenate(collected, axis=0)
 
 
+def collect_single_bbox_crop_points(
+    bbox: BBoxRecord,
+    blocks_dir: Path,
+    expand_ratio: float,
+    block_cache: Dict[str, np.ndarray],
+) -> np.ndarray:
+    """
+    Crop points for a single original bbox (unmerged), only from its own block file.
+    """
+    center = bbox.center
+    extent = bbox.extent
+    expanded_extent = extent * expand_ratio
+    crop_min = center - expanded_extent / 2.0
+    crop_max = center + expanded_extent / 2.0
+
+    if bbox.block_id not in block_cache:
+        block_file = blocks_dir / f"{bbox.block_id}.txt"
+        if not block_file.exists():
+            raise FileNotFoundError(f"Missing block point file for block_id={bbox.block_id}: {block_file}")
+        block_cache[bbox.block_id] = load_block_points(block_file)
+
+    pts = block_cache[bbox.block_id]
+    if pts.shape[0] == 0:
+        return np.empty((0, 7), dtype=float)
+
+    xyz = pts[:, :3]
+    mask = np.all((xyz >= crop_min) & (xyz <= crop_max), axis=1)
+    if not np.any(mask):
+        return np.empty((0, 7), dtype=float)
+    return pts[mask]
+
+
 def save_points_txt(points: np.ndarray, out_file: Path) -> None:
     out_file.parent.mkdir(parents=True, exist_ok=True)
     if points.shape[0] == 0:
@@ -422,6 +454,7 @@ def run_pipeline(
 
     out_dir.mkdir(parents=True, exist_ok=True)
     crops_dir = out_dir / "crops"
+    input_crops_dir = out_dir / "input_crops"
     block_cache: Dict[str, np.ndarray] = {}
 
     for idx, m in enumerate(merged):
@@ -442,6 +475,38 @@ def run_pipeline(
     with merged_json.open("w", encoding="utf-8") as f:
         json.dump(merged, f, indent=2, ensure_ascii=False)
 
+    # Save unmerged bbox crops and bbox metadata with one-to-one crop correspondence.
+    input_crop_bboxes = []
+    for i, b in enumerate(bboxes):
+        crop_points = collect_single_bbox_crop_points(
+            bbox=b,
+            blocks_dir=blocks_dir,
+            expand_ratio=expand_ratio,
+            block_cache=block_cache,
+        )
+        crop_file = input_crops_dir / f"input_{i:04d}.txt"
+        save_points_txt(crop_points, crop_file)
+
+        input_crop_bboxes.append(
+            {
+                "source_index": b.index,
+                "block_id": b.block_id,
+                "label": b.label,
+                "score": b.score,
+                "center": b.center.tolist(),
+                "extent": b.extent.tolist(),
+                "min_corner": b.min_corner.tolist(),
+                "max_corner": b.max_corner.tolist(),
+                "expanded_extent": (b.extent * expand_ratio).tolist(),
+                "crop_file": str(crop_file.relative_to(out_dir).as_posix()),
+                "num_crop_points": int(crop_points.shape[0]),
+            }
+        )
+
+    input_crop_json = out_dir / "input_crop_bboxes.json"
+    with input_crop_json.open("w", encoding="utf-8") as f:
+        json.dump(input_crop_bboxes, f, indent=2, ensure_ascii=False)
+
     if save_vis:
         vis_dir = out_dir / "visualization"
         save_input_bboxes_wireframe_obj(bboxes, vis_dir / "input_bboxes.obj")
@@ -451,6 +516,8 @@ def run_pipeline(
     print(f"Done. merged boxes: {len(merged)}")
     print(f"Saved: {merged_json}")
     print(f"Crops directory: {crops_dir}")
+    print(f"Unmerged input crop bbox file: {input_crop_json}")
+    print(f"Unmerged input crops directory: {input_crops_dir}")
     if save_vis:
         print(f"Visualization directory: {out_dir / 'visualization'}")
 

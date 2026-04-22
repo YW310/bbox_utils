@@ -35,6 +35,8 @@ python merge_bboxes.py \
 Expected output:
 - `demo/output/merged_bboxes.json`
 - `demo/output/crops/merged_0000.txt`, ...
+- `demo/output/input_crop_bboxes.json`（未 merge 的 bbox，和 input_crops 一一对应）
+- `demo/output/input_crops/input_0000.txt`, ...
 - `demo/output/visualization/input_bboxes.obj`
 - `demo/output/visualization/merged_bboxes.obj`
 - `demo/output/visualization/expanded_bboxes.obj`
