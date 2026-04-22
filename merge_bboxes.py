@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Sequence
@@ -56,6 +57,29 @@ class UnionFind:
         else:
             self.parent[rb] = ra
             self.rank[ra] += 1
+
+
+def _sanitize_token(text: str, max_len: int = 80) -> str:
+    token = re.sub(r"[^0-9A-Za-z_.-]+", "-", text).strip("-")
+    if not token:
+        token = "id"
+    if len(token) > max_len:
+        token = token[:max_len]
+    return token
+
+
+def build_input_crop_id(b: BBoxRecord) -> str:
+    return _sanitize_token(f"{b.block_id}_src{b.index}")
+
+
+def build_merged_crop_id(merged_bbox: dict) -> str:
+    block_part = "-".join(merged_bbox.get("source_block_ids", []))
+    idxs = merged_bbox.get("source_indices", [])
+    idx_part = "-".join(str(i) for i in idxs[:4])
+    if len(idxs) > 4:
+        idx_part += f"-and{len(idxs) - 4}more"
+    raw = f"label{merged_bbox.get('label', 'x')}_{block_part}_src{idx_part}"
+    return _sanitize_token(raw)
 
 
 def parse_args() -> argparse.Namespace:
@@ -287,24 +311,39 @@ def merge_bboxes_by_label(bboxes: Sequence[BBoxRecord], iou_thr: float) -> List[
 
 
 def load_block_points(block_file: Path) -> np.ndarray:
-    """Load block points into shape (N, 7): x,y,z,sem_label,r,g,b."""
+    """
+    Load block points into shape (N, 7): x,y,z,sem_label,r,g,b.
+
+    Delimiter is auto-detected per line; supported separators include:
+    comma, spaces, tabs, semicolons, or mixed separators.
+    """
+    rows = []
     try:
-        points = np.loadtxt(block_file, delimiter=",", dtype=float)
+        with block_file.open("r", encoding="utf-8") as f:
+            for line_no, raw in enumerate(f, start=1):
+                line = raw.strip()
+                if not line:
+                    continue
+                parts = [p for p in re.split(r"[,\s;]+", line) if p]
+                if len(parts) != 7:
+                    raise ValueError(
+                        f"Invalid point format in {block_file} line {line_no}: "
+                        f"expected 7 columns after delimiter parsing, got {len(parts)}"
+                    )
+                try:
+                    rows.append([float(v) for v in parts])
+                except ValueError as e:
+                    raise ValueError(
+                        f"Invalid numeric value in {block_file} line {line_no}: {line}"
+                    ) from e
     except Exception as e:
+        if isinstance(e, ValueError):
+            raise
         raise ValueError(f"Failed to read block file {block_file}: {e}") from e
 
-    if points.size == 0:
+    if not rows:
         return np.empty((0, 7), dtype=float)
-
-    if points.ndim == 1:
-        if points.shape[0] != 7:
-            raise ValueError(f"Invalid point format in {block_file}: expected 7 columns")
-        points = points[None, :]
-
-    if points.shape[1] != 7:
-        raise ValueError(f"Invalid point format in {block_file}: expected 7 columns, got {points.shape[1]}")
-
-    return points
+    return np.asarray(rows, dtype=float)
 
 
 def collect_crop_points(
@@ -483,6 +522,7 @@ def run_pipeline(
     block_cache: Dict[str, np.ndarray] = {}
 
     for idx, m in enumerate(merged):
+        merged_id = build_merged_crop_id(m)
         crop_points = collect_crop_points(
             merged_bbox=m,
             blocks_dir=blocks_dir,
@@ -490,9 +530,10 @@ def run_pipeline(
             block_ext=block_ext,
             block_cache=block_cache,
         )
-        crop_file = crops_dir / f"merged_{idx:04d}.txt"
+        crop_file = crops_dir / f"merged_{idx:04d}_{merged_id}.txt"
         save_points_txt(crop_points, crop_file)
 
+        m["merged_id"] = merged_id
         m["expanded_extent"] = (np.asarray(m["extent"], dtype=float) * expand_ratio).tolist()
         m["crop_file"] = str(crop_file.relative_to(out_dir).as_posix())
         m["num_crop_points"] = int(crop_points.shape[0])
@@ -504,6 +545,7 @@ def run_pipeline(
     # Save unmerged bbox crops and bbox metadata with one-to-one crop correspondence.
     input_crop_bboxes = []
     for i, b in enumerate(bboxes):
+        input_id = build_input_crop_id(b)
         crop_points = collect_single_bbox_crop_points(
             bbox=b,
             blocks_dir=blocks_dir,
@@ -511,11 +553,12 @@ def run_pipeline(
             block_ext=block_ext,
             block_cache=block_cache,
         )
-        crop_file = input_crops_dir / f"input_{i:04d}.txt"
+        crop_file = input_crops_dir / f"input_{i:04d}_{input_id}.txt"
         save_points_txt(crop_points, crop_file)
 
         input_crop_bboxes.append(
             {
+                "input_id": input_id,
                 "source_index": b.index,
                 "block_id": b.block_id,
                 "label": b.label,
