@@ -67,7 +67,7 @@ def parse_args() -> argparse.Namespace:
         "--blocks_dir",
         type=Path,
         default=Path("./demo/blocks"),
-        help="Directory containing block txt files",
+        help="Directory containing block point files",
     )
     parser.add_argument(
         "--bbox_json",
@@ -76,6 +76,18 @@ def parse_args() -> argparse.Namespace:
         help="Path to bbox JSON file, or directory containing per-block JSON files",
     )
     parser.add_argument("--out_dir", type=Path, default=Path("./demo/output"), help="Output directory")
+    parser.add_argument(
+        "--block_ext",
+        type=str,
+        default=".pts",
+        help="Point cloud block file extension (e.g. .pts)",
+    )
+    parser.add_argument(
+        "--bbox_suffix",
+        type=str,
+        default=".txt_pred_det.json",
+        help="Per-block bbox file suffix in directory mode",
+    )
     parser.add_argument("--iou_thr", type=float, default=0.1, help="IoU threshold for merging")
     parser.add_argument(
         "--expand_ratio",
@@ -100,6 +112,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError(f"iou_thr must be in [0, 1], got {args.iou_thr}")
     if args.expand_ratio <= 0:
         raise ValueError(f"expand_ratio must be > 0, got {args.expand_ratio}")
+    if not args.block_ext.startswith("."):
+        raise ValueError(f"block_ext must start with '.', got {args.block_ext}")
+    if not args.bbox_suffix.endswith(".json"):
+        raise ValueError(f"bbox_suffix must end with '.json', got {args.bbox_suffix}")
 
 
 def _load_bbox_items_from_json_file(json_file: Path) -> list:
@@ -110,7 +126,7 @@ def _load_bbox_items_from_json_file(json_file: Path) -> list:
     return data
 
 
-def load_bboxes(bbox_json: Path) -> List[BBoxRecord]:
+def load_bboxes(bbox_json: Path, bbox_suffix: str = ".txt_pred_det.json") -> List[BBoxRecord]:
     """
     Load bbox records.
 
@@ -120,11 +136,16 @@ def load_bboxes(bbox_json: Path) -> List[BBoxRecord]:
     """
     if bbox_json.is_dir():
         data: list = []
-        json_files = sorted(bbox_json.glob("*.json"))
+        json_files = sorted(bbox_json.glob(f"*{bbox_suffix}"))
         if not json_files:
-            raise ValueError(f"No json files found in bbox_json directory: {bbox_json}")
+            raise ValueError(
+                f"No bbox files found in bbox_json directory: {bbox_json} "
+                f"(expected pattern *{bbox_suffix})"
+            )
         for jf in json_files:
-            stem_block_id = jf.stem
+            stem_block_id = jf.name[: -len(bbox_suffix)]
+            if not stem_block_id:
+                raise ValueError(f"Invalid bbox file name: {jf.name}, expected <block_id>{bbox_suffix}")
             items = _load_bbox_items_from_json_file(jf)
             for item in items:
                 if not isinstance(item, dict):
@@ -133,7 +154,7 @@ def load_bboxes(bbox_json: Path) -> List[BBoxRecord]:
                     raise ValueError(
                         f"In directory mode, bbox json file name must match block_id: "
                         f"{jf.name} vs block_id={item['block_id']}. "
-                        f"Expected naming like <block_id>.json"
+                        f"Expected naming like <block_id>{bbox_suffix}"
                     )
                 if "block_id" not in item:
                     item = {**item, "block_id": stem_block_id}
@@ -181,14 +202,14 @@ def load_bboxes(bbox_json: Path) -> List[BBoxRecord]:
     return bboxes
 
 
-def validate_block_mapping(bboxes: Sequence[BBoxRecord], blocks_dir: Path) -> None:
+def validate_block_mapping(bboxes: Sequence[BBoxRecord], blocks_dir: Path, block_ext: str = ".pts") -> None:
     """
     Validate bbox/block one-to-one mapping by block_id prefix.
     Each bbox's block_id must map to `<blocks_dir>/<block_id>.txt`.
     """
     missing = []
     for b in bboxes:
-        point_file = blocks_dir / f"{b.block_id}.txt"
+        point_file = blocks_dir / f"{b.block_id}{block_ext}"
         if not point_file.exists():
             missing.append(str(point_file))
     if missing:
@@ -290,6 +311,7 @@ def collect_crop_points(
     merged_bbox: dict,
     blocks_dir: Path,
     expand_ratio: float,
+    block_ext: str,
     block_cache: Dict[str, np.ndarray],
 ) -> np.ndarray:
     center = np.asarray(merged_bbox["center"], dtype=float)
@@ -301,7 +323,7 @@ def collect_crop_points(
     collected = []
     for block_id in merged_bbox["source_block_ids"]:
         if block_id not in block_cache:
-            block_file = blocks_dir / f"{block_id}.txt"
+            block_file = blocks_dir / f"{block_id}{block_ext}"
             if not block_file.exists():
                 raise FileNotFoundError(f"Missing block point file for block_id={block_id}: {block_file}")
             block_cache[block_id] = load_block_points(block_file)
@@ -325,6 +347,7 @@ def collect_single_bbox_crop_points(
     bbox: BBoxRecord,
     blocks_dir: Path,
     expand_ratio: float,
+    block_ext: str,
     block_cache: Dict[str, np.ndarray],
 ) -> np.ndarray:
     """
@@ -337,7 +360,7 @@ def collect_single_bbox_crop_points(
     crop_max = center + expanded_extent / 2.0
 
     if bbox.block_id not in block_cache:
-        block_file = blocks_dir / f"{bbox.block_id}.txt"
+        block_file = blocks_dir / f"{bbox.block_id}{block_ext}"
         if not block_file.exists():
             raise FileNotFoundError(f"Missing block point file for block_id={bbox.block_id}: {block_file}")
         block_cache[bbox.block_id] = load_block_points(block_file)
@@ -446,10 +469,12 @@ def run_pipeline(
     out_dir: Path,
     iou_thr: float,
     expand_ratio: float,
+    block_ext: str = ".pts",
+    bbox_suffix: str = ".txt_pred_det.json",
     save_vis: bool = False,
 ) -> None:
-    bboxes = load_bboxes(bbox_json)
-    validate_block_mapping(bboxes, blocks_dir)
+    bboxes = load_bboxes(bbox_json, bbox_suffix=bbox_suffix)
+    validate_block_mapping(bboxes, blocks_dir, block_ext=block_ext)
     merged = merge_bboxes_by_label(bboxes, iou_thr=iou_thr)
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -462,6 +487,7 @@ def run_pipeline(
             merged_bbox=m,
             blocks_dir=blocks_dir,
             expand_ratio=expand_ratio,
+            block_ext=block_ext,
             block_cache=block_cache,
         )
         crop_file = crops_dir / f"merged_{idx:04d}.txt"
@@ -482,6 +508,7 @@ def run_pipeline(
             bbox=b,
             blocks_dir=blocks_dir,
             expand_ratio=expand_ratio,
+            block_ext=block_ext,
             block_cache=block_cache,
         )
         crop_file = input_crops_dir / f"input_{i:04d}.txt"
@@ -531,6 +558,8 @@ def main() -> None:
         out_dir=args.out_dir,
         iou_thr=args.iou_thr,
         expand_ratio=args.expand_ratio,
+        block_ext=args.block_ext,
+        bbox_suffix=args.bbox_suffix,
         save_vis=args.save_vis,
     )
 
