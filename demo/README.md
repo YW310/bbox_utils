@@ -14,6 +14,14 @@ This folder provides a minimal runnable example.
 - `bboxes/block_0004.json`
 
 ## Run
+默认参数已指向本 demo（`blocks_dir=./demo/blocks`, `bbox_json=./demo/bboxes`, `out_dir=./demo/output`），可直接运行：
+
+```bash
+python merge_bboxes.py --save_vis
+```
+
+或显式传参运行：
+
 ```bash
 python merge_bboxes.py \
   --blocks_dir ./demo/blocks \

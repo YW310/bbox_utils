@@ -59,15 +59,23 @@ class UnionFind:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Merge duplicated 3D bboxes across blocks.")
-    parser.add_argument("--blocks_dir", type=Path, required=True, help="Directory containing block txt files")
+    parser = argparse.ArgumentParser(
+        description="Merge duplicated 3D bboxes across blocks.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--blocks_dir",
+        type=Path,
+        default=Path("./demo/blocks"),
+        help="Directory containing block txt files",
+    )
     parser.add_argument(
         "--bbox_json",
         type=Path,
-        required=True,
+        default=Path("./demo/bboxes"),
         help="Path to bbox JSON file, or directory containing per-block JSON files",
     )
-    parser.add_argument("--out_dir", type=Path, required=True, help="Output directory")
+    parser.add_argument("--out_dir", type=Path, default=Path("./demo/output"), help="Output directory")
     parser.add_argument("--iou_thr", type=float, default=0.1, help="IoU threshold for merging")
     parser.add_argument(
         "--expand_ratio",
