@@ -70,6 +70,11 @@ def parse_args() -> argparse.Namespace:
         default=1.5,
         help="Extent scale factor for crop extraction (default: 1.5)",
     )
+    parser.add_argument(
+        "--save_vis",
+        action="store_true",
+        help="If set, export merged bbox wireframes as OBJ in out_dir/visualization",
+    )
     return parser.parse_args()
 
 
@@ -265,7 +270,67 @@ def save_points_txt(points: np.ndarray, out_file: Path) -> None:
             f.write(f"{x:.6f},{y:.6f},{z:.6f},{int(round(sem_label))},{int(round(r))},{int(round(g))},{int(round(b))}\n")
 
 
-def run_pipeline(blocks_dir: Path, bbox_json: Path, out_dir: Path, iou_thr: float, expand_ratio: float) -> None:
+def box_corners_from_min_max(min_corner: np.ndarray, max_corner: np.ndarray) -> np.ndarray:
+    """Return the 8 corners of an AABB in a fixed order."""
+    x0, y0, z0 = min_corner.tolist()
+    x1, y1, z1 = max_corner.tolist()
+    return np.asarray(
+        [
+            [x0, y0, z0],
+            [x1, y0, z0],
+            [x1, y1, z0],
+            [x0, y1, z0],
+            [x0, y0, z1],
+            [x1, y0, z1],
+            [x1, y1, z1],
+            [x0, y1, z1],
+        ],
+        dtype=float,
+    )
+
+
+def save_bboxes_wireframe_obj(merged: Sequence[dict], out_file: Path, use_expanded: bool = False) -> None:
+    """
+    Save merged bboxes as wireframe OBJ.
+
+    Notes:
+    - Each bbox contributes 8 vertices + 12 line segments.
+    - If use_expanded=True, it visualizes expanded crop boxes.
+    """
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    edges = [
+        (1, 2), (2, 3), (3, 4), (4, 1),
+        (5, 6), (6, 7), (7, 8), (8, 5),
+        (1, 5), (2, 6), (3, 7), (4, 8),
+    ]
+
+    with out_file.open("w", encoding="utf-8") as f:
+        f.write("# merged bbox wireframe\n")
+        vertex_offset = 0
+        for i, m in enumerate(merged):
+            center = np.asarray(m["center"], dtype=float)
+            extent_key = "expanded_extent" if use_expanded else "extent"
+            extent = np.asarray(m[extent_key], dtype=float)
+            min_corner = center - extent / 2.0
+            max_corner = center + extent / 2.0
+            corners = box_corners_from_min_max(min_corner, max_corner)
+
+            f.write(f"o merged_{i:04d}_label_{m['label']}\n")
+            for v in corners:
+                f.write(f"v {v[0]:.6f} {v[1]:.6f} {v[2]:.6f}\n")
+            for a, b in edges:
+                f.write(f"l {vertex_offset + a} {vertex_offset + b}\n")
+            vertex_offset += 8
+
+
+def run_pipeline(
+    blocks_dir: Path,
+    bbox_json: Path,
+    out_dir: Path,
+    iou_thr: float,
+    expand_ratio: float,
+    save_vis: bool = False,
+) -> None:
     bboxes = load_bboxes(bbox_json)
     merged = merge_bboxes_by_label(bboxes, iou_thr=iou_thr)
 
@@ -291,9 +356,16 @@ def run_pipeline(blocks_dir: Path, bbox_json: Path, out_dir: Path, iou_thr: floa
     with merged_json.open("w", encoding="utf-8") as f:
         json.dump(merged, f, indent=2, ensure_ascii=False)
 
+    if save_vis:
+        vis_dir = out_dir / "visualization"
+        save_bboxes_wireframe_obj(merged, vis_dir / "merged_bboxes.obj", use_expanded=False)
+        save_bboxes_wireframe_obj(merged, vis_dir / "expanded_bboxes.obj", use_expanded=True)
+
     print(f"Done. merged boxes: {len(merged)}")
     print(f"Saved: {merged_json}")
     print(f"Crops directory: {crops_dir}")
+    if save_vis:
+        print(f"Visualization directory: {out_dir / 'visualization'}")
 
 
 def main() -> None:
@@ -305,6 +377,7 @@ def main() -> None:
         out_dir=args.out_dir,
         iou_thr=args.iou_thr,
         expand_ratio=args.expand_ratio,
+        save_vis=args.save_vis,
     )
 
 
